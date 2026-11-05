@@ -9,6 +9,7 @@
 | PC→Dev | `!EMBACKUP HELLO <session32hex>` | 建立会话 |
 | Dev→PC | `!EMBACKUP READY <session> <device_id12hex>` | 就绪 |
 | PC→Dev | `!EMBACKUP PING <session>` | 心跳（约 4s） |
+| PC→Dev | `!EMBACKUP PULL <session>` | 网页一键拉取备份（等同设备「备份存档」） |
 | PC→Dev | `!EMBACKUP BYE <session>` | 结束 |
 | Dev→PC | `!EMBACKUP HINT <utf8 text…>` | 可选提示（空格后原文） |
 
@@ -36,18 +37,17 @@ PC 落盘并回读校验后：
 
 ## 导入（网页发起，设备确认）
 
-1. 设备进入导入模式。  
-2. PC：`!EMBACKUP OFFER <session> <device> <firmware> <save_version> <size> <crc32>`  
-3. Dev：`!EMBACKUP OFFERED`（或 `ERROR OPEN_IMPORT` / `INCOMPATIBLE` / `BUSY`）  
-4. 用户确认覆盖后，设备先导出当前档（同上 BEGIN/DATA/END），PC 存为 `Ember-before-import-…emsave` 后 ACK。  
-5. Dev：`!EMBACKUP UPLOAD <id>`  
-6. PC：`!EMBACKUP RDATA <session> <id> <offset> <256 hex>`  
-7. Dev：`!EMBACKUP NEXT <id> <next_offset>`  
-8. PC：`!EMBACKUP RFIN <session> <id>`  
-9. Dev 校验暂存成功：`!EMBACKUP STAGED <crc32>` 并重启。  
-10. 再连接后 Dev：`!EMBACKUP RESTORED <session> <result> <crc32>`  
+1. PC：`!EMBACKUP OFFER <session> <device> <firmware> <save_version> <size> <crc32>`（设备空闲即可，无需预开导入菜单）  
+2. Dev：弹出确认并回 `!EMBACKUP OFFERED`（或 `INCOMPATIBLE` / `BUSY`）  
+3. 用户确认覆盖后，设备先导出当前档（同上 BEGIN/DATA/END），PC 存为 `Ember-before-import-…emsave` 后 ACK。  
+4. Dev：`!EMBACKUP UPLOAD <id>`  
+5. PC：`!EMBACKUP RDATA <session> <id> <offset> <256 hex>`  
+6. Dev：`!EMBACKUP NEXT <id> <next_offset>`  
+7. PC：`!EMBACKUP RFIN <session> <id>`  
+8. Dev 校验暂存成功：`!EMBACKUP STAGED <crc32>` 并重启。  
+9. 再连接后 Dev：`!EMBACKUP RESTORED <session> <result> <crc32>`  
     - `1` 成功读档  
-    - `2` 写入失败已回滚  
+    - `2` 擦除后写入失败（设备无法本地回滚；请用电脑上的 `Ember-before-import-…emsave` 再导入）  
     - `3` 写入后读档失败  
 
 ## 错误

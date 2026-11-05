@@ -16,6 +16,8 @@ let selectedImport = null;
 let transfer = null;
 let expectedRestore = null;
 let device = null;
+let autoReconnectTimer = null;
+let reconnecting = false;
 
 const restoreKey = 'ember-pending-restore';
 try {
@@ -51,12 +53,11 @@ function setStatus(text, { error = false, tip = false } = {}) {
 
 function markSteps() {
   const hasDir = !!directory;
-  const hasPort = !!port;
   const ready = connected;
   setStep('step-folder', hasDir ? 'done' : 'current');
   setStep(
     'step-connect',
-    !hasDir ? 'locked' : hasPort || ready ? 'done' : 'current',
+    hasPortOrReady() ? 'done' : hasDir || expectedRestore ? 'current' : 'ready',
   );
   setStep(
     'step-backup',
@@ -66,6 +67,10 @@ function markSteps() {
     'step-import',
     !ready || !hasDir ? 'locked' : expectedRestore ? 'current' : 'ready',
   );
+}
+
+function hasPortOrReady() {
+  return !!port || connected;
 }
 
 function setStep(id, state) {
@@ -88,26 +93,32 @@ function send(text) {
 
 function controls() {
   $('forget-result').hidden = !expectedRestore;
-  $('connect').disabled = !directory || !!port;
+  $('connect').disabled = !!port || reconnecting;
   $('disconnect').disabled = !port;
-  $('folder').disabled = !!port;
+  $('folder').disabled = !!transfer || !!receiver?.pending;
+  $('pull').disabled =
+    !connected || !directory || !!transfer || !!expectedRestore || !!receiver?.pending;
   $('import').disabled =
     !connected ||
-    !selectedImport ||
+    !directory ||
     !!transfer ||
     !!expectedRestore ||
     !!receiver?.pending;
-  $('import-file').disabled = !!transfer || !!expectedRestore || !!receiver?.pending;
   markSteps();
+}
+
+async function ensureDirectory() {
+  if (directory) {
+    if ((await directory.queryPermission({ mode: 'readwrite' })) === 'granted') {
+      return true;
+    }
+  }
+  throw Error('请先选择可写入的备份目录');
 }
 
 async function save(q) {
   try {
-    if (
-      (await directory.queryPermission({ mode: 'readwrite' })) !== 'granted'
-    ) {
-      throw Error('目录写入授权已失效。请点「选择备份目录」重新授权。');
-    }
+    await ensureDirectory();
     if (transfer && transfer.file.metadata.device_id !== q.device) {
       throw Error('当前设备与待导入文件不匹配，已中止。');
     }
@@ -117,20 +128,21 @@ async function save(q) {
         : '校验通过，正在写入备份文件…',
     );
     const data = await envelope(q);
+    const body = `${JSON.stringify(data)}\n`;
     const stamp = data.created_at.replace(/[:.]/g, '-');
     const name = `Ember-${transfer ? 'before-import-' : ''}${stamp}-${crypto.randomUUID()}.emsave`;
     const file = await directory.getFileHandle(name, { create: true });
     let stream;
     try {
       stream = await file.createWritable();
-      await stream.write(`${JSON.stringify(data, null, 2)}\n`);
+      await stream.write(body);
       await stream.close();
     } catch (e) {
       if (stream) await stream.abort().catch(() => {});
       throw e;
     }
     const readBack = await (await file.getFile()).text();
-    if (readBack !== `${JSON.stringify(data, null, 2)}\n`) {
+    if (readBack !== body) {
       throw Error('保存后回读校验失败。请换一个目录重试，不要删除设备上的进度。');
     }
     const item = document.createElement('li');
@@ -144,8 +156,8 @@ async function save(q) {
     await send(`${PROTOCOL} ACK ${session} ${q.id}`);
     setStatus(
       transfer
-        ? '覆盖前备份已保存。接下来会把导入文件发给设备…'
-        : '备份已保存到电脑。请看设备是否显示「备份完成」。不要删除这个 .emsave。',
+        ? '覆盖前备份已保存，正在写入导入文件…'
+        : '备份完成，已落盘。',
       { tip: true },
     );
   } catch (e) {
@@ -161,7 +173,7 @@ async function nextChunk(id, offset) {
   }
   if (offset === t.file.bytes.length) {
     await send(`${PROTOCOL} RFIN ${session} ${id}`);
-    setStatus('传送完成。设备正在校验并暂存，请保持供电，不要拔线。');
+    setStatus('传送完成。设备正在校验并写入，请保持供电。');
     return;
   }
   const hex = Array.from(t.file.bytes.slice(offset, offset + 128), (b) =>
@@ -181,66 +193,92 @@ async function line(text) {
     $('connection').textContent = `已连接 · 设备 ${device}`;
     setStatus(
       expectedRestore
-        ? '已重新连接，正在等待导入结果回执…'
-        : '连接成功。现在可以：在设备上备份，或打开「导入存档」后发送文件。',
+        ? '已重新连接，正在核对导入结果…'
+        : '已连接。可点「立即备份」，或「选择并导入」。',
       { tip: true },
     );
+  }
+  if (result?.error) {
+    const meta = transfer?.file?.metadata;
+    const midImport = !!meta;
+    transfer = null;
+    if (receiver) receiver.pending = null;
+    $('progress').value = 0;
+    setStatus(result.error, { error: true });
+    /* Commit failure reboots the device; keep a restore watch for RESTORED. */
+    if (midImport && /写入|STAGE|FLASH|暂存/.test(result.error)) {
+      rememberRestore({ crc: meta.crc32, device: meta.device_id });
+      scheduleAutoReconnect();
+    }
+  }
+  if (result?.busy) {
+    setStatus('设备正忙，请等待当前进度完成。', { tip: true });
   }
   if (result?.hint) {
-    setStatus(`设备提示：${result.hint}`, { tip: true });
+    setStatus(`设备：${result.hint}`, { tip: true });
   }
   if (result?.offered) {
-    setStatus(
-      '设备已收到导入请求。请在设备上选择「确认覆盖」并按确认键；默认是取消，误触不会覆盖。',
-      { tip: true },
-    );
+    setStatus('请在设备上确认覆盖（默认是取消）。', { tip: true });
   }
   if (result?.cancelled) {
     transfer = null;
+    selectedImport = null;
+    $('import-info').textContent = '已取消';
     setStatus('已取消导入，当前存档未覆盖。', { tip: true });
   }
   if (result?.progress !== undefined) {
     $('progress').value = result.progress;
     setStatus(
-      `${transfer ? '备份当前存档' : '正在接收备份'} ${Math.round(result.progress * 100)}%`,
+      `${transfer ? '备份当前档' : '正在备份'} ${Math.round(result.progress * 100)}%`,
     );
   }
-  if (result?.complete) await save(result.complete);
-  if (result?.upload) await nextChunk(result.upload, 0);
-  if (result?.next) await nextChunk(result.next.id, result.next.offset);
-  if (result?.staged) {
-    if (!transfer || result.staged !== transfer.file.metadata.crc32) {
-      throw Error('设备暂存确认不匹配');
+  try {
+    if (result?.complete) await save(result.complete);
+    if (result?.upload) await nextChunk(result.upload, 0);
+    if (result?.next) await nextChunk(result.next.id, result.next.offset);
+    if (result?.staged) {
+      if (!transfer || result.staged !== transfer.file.metadata.crc32) {
+        throw Error('设备暂存确认不匹配');
+      }
+      rememberRestore({
+        crc: result.staged,
+        device: transfer.file.metadata.device_id,
+      });
+      transfer = null;
+      connected = false;
+      setStatus('写入完成，设备重启中；将自动重连核对结果。', { tip: true });
+      scheduleAutoReconnect();
     }
-    rememberRestore({ crc: result.staged, device: transfer.file.metadata.device_id });
+    if (result?.restored) {
+      const messages = {
+        1: '导入完成。请在设备核对天数、仓库与线索。',
+        2: '导入写入失败，设备无法本地回滚。请立即用目录里 Ember-before-import- 备份再导入。',
+        3: '已写入但读档失败，不能确认成功。请保留原备份与 before-import 文件。',
+      };
+      const msg = messages[result.restored.result] || '收到导入结果，请在设备核对。';
+      if (expectedRestore) {
+        if (
+          transfer ||
+          expectedRestore.device !== device ||
+          expectedRestore.crc !== result.restored.crc
+        ) {
+          throw Error(
+            '重启后的导入结果不匹配，尚未确认恢复成功。请保留原备份，在设备上核对进度。',
+          );
+        }
+      }
+      setStatus(msg, {
+        error: result.restored.result !== 1,
+        tip: result.restored.result === 1,
+      });
+      rememberRestore(null);
+      clearAutoReconnect();
+    }
+  } catch (e) {
     transfer = null;
-    connected = false;
-    setStatus(
-      '文件已暂存。设备即将重启；若 USB 断开，请重新连接本页核对结果。在核对完成前不要删除原备份。',
-      { tip: true },
-    );
-  }
-  if (result?.restored) {
-    if (!expectedRestore) return;
-    if (
-      transfer ||
-      expectedRestore.device !== device ||
-      expectedRestore.crc !== result.restored.crc
-    ) {
-      throw Error(
-        '重启后的导入结果不匹配，尚未确认恢复成功。请保留原备份，在设备上核对进度。',
-      );
-    }
-    const messages = {
-      1: '设备已确认：存档导入完成。请在设备核对天数、仓库与线索进度。',
-      2: '导入写入失败，设备已恢复覆盖前的存档。请保留原备份。',
-      3: '存档已写入，但游戏读档失败，不能确认导入成功。请保留原备份，勿开始新游戏。',
-    };
-    setStatus(messages[result.restored.result], {
-      error: result.restored.result !== 1,
-      tip: result.restored.result === 1,
-    });
-    rememberRestore(null);
+    if (receiver) receiver.pending = null;
+    $('progress').value = 0;
+    setStatus(e.message, { error: true });
   }
   controls();
 }
@@ -266,35 +304,85 @@ async function readLoop() {
     if (!closing) {
       setStatus(
         expectedRestore
-          ? 'USB 已断开。请重新连接核对导入结果；当前尚未确认恢复成功。'
-          : 'USB 连接已断开。未确认的操作不算完成。',
-        { error: !expectedRestore },
+          ? 'USB 已断开，正在尝试自动重连以核对导入结果…'
+          : 'USB 已断开。',
+        { error: !expectedRestore, tip: !!expectedRestore },
       );
+      if (expectedRestore) scheduleAutoReconnect();
     }
   } catch (e) {
     if (!closing) {
       setStatus(
         `${e.message}${
           expectedRestore
-            ? '；导入结果尚未确认，请重新连接并保留原备份。'
+            ? '；导入结果尚未确认，请保留原备份。'
             : ''
         }`,
         { error: true },
       );
+      if (expectedRestore) scheduleAutoReconnect();
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader?.releaseLock();
+    } catch {
+      /* ignore */
+    }
     reader = null;
     transfer = null;
-    await cleanup();
+    await cleanup({ keepAutoReconnect: !!expectedRestore });
   }
 }
 
-async function cleanup() {
+function clearAutoReconnect() {
+  if (autoReconnectTimer) {
+    clearTimeout(autoReconnectTimer);
+    autoReconnectTimer = null;
+  }
+  reconnecting = false;
+}
+
+function scheduleAutoReconnect() {
+  clearAutoReconnect();
+  if (!expectedRestore) return;
+  reconnecting = true;
+  controls();
+  let attempt = 0;
+  const tick = async () => {
+    if (!expectedRestore || port) {
+      reconnecting = false;
+      controls();
+      return;
+    }
+    attempt += 1;
+    setStatus(`自动重连中（第 ${attempt} 次）…`, { tip: true });
+    try {
+      await openGrantedPort();
+      reconnecting = false;
+      controls();
+      return;
+    } catch {
+      /* retry */
+    }
+    if (attempt >= 20) {
+      reconnecting = false;
+      setStatus('自动重连超时。请点「连接设备」手动核对导入结果。', {
+        error: true,
+      });
+      controls();
+      return;
+    }
+    autoReconnectTimer = setTimeout(tick, attempt < 5 ? 800 : 1500);
+  };
+  autoReconnectTimer = setTimeout(tick, 1000);
+}
+
+async function cleanup({ keepAutoReconnect = false } = {}) {
   clearInterval(heartbeat);
   heartbeat = null;
   connected = false;
   device = null;
+  if (!keepAutoReconnect) clearAutoReconnect();
   if (writer) {
     try {
       await writeQueue;
@@ -316,8 +404,43 @@ async function cleanup() {
     }
     port = null;
   }
-  $('connection').textContent = '已断开';
+  $('connection').textContent = expectedRestore ? '等待重连核对…' : '已断开';
   controls();
+}
+
+async function startSession(selectedPort) {
+  closing = false;
+  writeQueue = Promise.resolve();
+  port = selectedPort;
+  controls();
+  await port.open({ baudRate: 115200, bufferSize: 65536 });
+  writer = port.writable.getWriter();
+  reader = port.readable.getReader();
+  session = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+    b.toString(16).padStart(2, '0'),
+  ).join('');
+  receiver = new Receiver(session);
+  void readLoop();
+  await send(`${PROTOCOL} HELLO ${session}`);
+  setStatus(
+    expectedRestore
+      ? '已打开串口，等待导入结果回执…'
+      : '已打开串口，等待设备响应…',
+  );
+  heartbeat = setInterval(() => {
+    send(`${PROTOCOL} ${connected ? 'PING' : 'HELLO'} ${session}`).catch(
+      (e) => {
+        setStatus(e.message, { error: true });
+        void reader?.cancel();
+      },
+    );
+  }, 4000);
+}
+
+async function openGrantedPort() {
+  const ports = await navigator.serial.getPorts();
+  if (!ports.length) throw Error('no granted port');
+  await startSession(ports[0]);
 }
 
 $('folder').onclick = async () => {
@@ -327,7 +450,7 @@ $('folder').onclick = async () => {
       mode: 'readwrite',
     });
     $('directory').textContent = `已选：${directory.name}`;
-    setStatus('备份目录已就绪。下一步：连接设备。', { tip: true });
+    setStatus('目录已就绪。下一步：连接设备。', { tip: true });
     controls();
   } catch (e) {
     if (e.name !== 'AbortError') setStatus(e.message, { error: true });
@@ -336,34 +459,15 @@ $('folder').onclick = async () => {
 
 $('connect').onclick = async () => {
   try {
-    closing = false;
-    writeQueue = Promise.resolve();
-    port = await navigator.serial.requestPort({
+    clearAutoReconnect();
+    const selected = await navigator.serial.requestPort({
       filters: [{ usbVendorId: 0x303a, usbProductId: 0x1001 }],
     });
-    controls();
-    await port.open({ baudRate: 115200, bufferSize: 65536 });
-    writer = port.writable.getWriter();
-    reader = port.readable.getReader();
-    session = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
-      b.toString(16).padStart(2, '0'),
-    ).join('');
-    receiver = new Receiver(session);
-    void readLoop();
-    await send(`${PROTOCOL} HELLO ${session}`);
-    setStatus('已打开串口，等待设备响应… 若长时间无响应，请确认设备已开机且固件支持存档协议。');
-    heartbeat = setInterval(() => {
-      send(`${PROTOCOL} ${connected ? 'PING' : 'HELLO'} ${session}`).catch(
-        (e) => {
-          setStatus(e.message, { error: true });
-          void reader?.cancel();
-        },
-      );
-    }, 4000);
+    await startSession(selected);
   } catch (e) {
     setStatus(
       e.name === 'NotFoundError'
-        ? '未选择设备。请再点「连接设备」，并选择名称含 USB JTAG/serial 的接口。'
+        ? '未选择设备。请再点「连接设备」，并选择 USB JTAG/serial。'
         : e.message,
       { error: true },
     );
@@ -374,6 +478,7 @@ $('connect').onclick = async () => {
 
 $('disconnect').onclick = async () => {
   closing = true;
+  clearAutoReconnect();
   clearInterval(heartbeat);
   try {
     await send(`${PROTOCOL} BYE ${session}`);
@@ -384,65 +489,85 @@ $('disconnect').onclick = async () => {
   else await cleanup();
   setStatus(
     expectedRestore
-      ? '设备已接收导入文件；重新连接核对结果。'
-      : '已断开。已保存到目录的备份仍然保留。',
+      ? '已断开。需要核对结果时再连接同一台设备。'
+      : '已断开。已保存的备份仍在目录中。',
     { tip: true },
   );
 };
 
-$('import-file').onchange = async () => {
-  selectedImport = null;
-  controls();
+$('pull').onclick = async () => {
+  if (!connected || !directory || transfer || expectedRestore) return;
   try {
-    const file = $('import-file').files[0];
-    if (!file) return;
-    if (file.size > 120000) throw Error('备份文件过大');
-    selectedImport = await decodeBackup(await file.text());
-    const m = selectedImport.metadata;
-    $('import-info').textContent = `${file.name} · 校验通过 · 存档 V${m.save_version} · 设备 ${m.device_id}`;
-    setStatus('文件校验通过。请先在设备打开「设置 → 导入存档」，再点「发送导入请求」。', {
-      tip: true,
-    });
+    await ensureDirectory();
+    $('progress').value = 0;
+    setStatus('已请求备份，等待设备发送…', { tip: true });
+    await send(`${PROTOCOL} PULL ${session}`);
   } catch (e) {
-    $('import-info').textContent = e.message;
     setStatus(e.message, { error: true });
   }
-  controls();
 };
 
-$('import').onclick = async () => {
-  if (!connected || !selectedImport || transfer || expectedRestore) return;
-  try {
-    const d = selectedImport.metadata;
-    if (d.device_id !== device) {
-      throw Error(
-        `备份属于设备 ${d.device_id}，当前连接的是 ${device}。导入仅限同一台 AI Passport。`,
-      );
-    }
-    if (
-      (await directory.queryPermission({ mode: 'readwrite' })) !== 'granted'
-    ) {
-      throw Error('请重新选择有写入权限的备份目录');
-    }
-    transfer = { file: selectedImport };
-    controls();
-    await send(
-      `${PROTOCOL} OFFER ${session} ${d.device_id} ${d.firmware} ${d.save_version} ${selectedImport.bytes.length} ${d.crc32}`,
+async function pickImportFile() {
+  if (window.showOpenFilePicker) {
+    const [handle] = await window.showOpenFilePicker({
+      multiple: false,
+      types: [
+        {
+          description: '余烬存档',
+          accept: { 'application/json': ['.emsave'] },
+        },
+      ],
+    });
+    return handle.getFile();
+  }
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.emsave,application/json';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) resolve(file);
+      else reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+    };
+    input.click();
+  });
+}
+
+async function startImportWithFile(file) {
+  if (file.size > 120000) throw Error('备份文件过大');
+  selectedImport = await decodeBackup(await file.text());
+  const d = selectedImport.metadata;
+  $('import-info').textContent = `${file.name} · V${d.save_version} · ${d.device_id}`;
+  if (d.device_id !== device) {
+    throw Error(
+      `备份属于设备 ${d.device_id}，当前是 ${device}。只能导入到同一台设备。`,
     );
-    setStatus('已发送导入请求，等待设备确认…');
+  }
+  transfer = { file: selectedImport };
+  controls();
+  await send(
+    `${PROTOCOL} OFFER ${session} ${d.device_id} ${d.firmware} ${d.save_version} ${selectedImport.bytes.length} ${d.crc32}`,
+  );
+  setStatus('已发送。请在设备上确认覆盖（默认取消）。', { tip: true });
+}
+
+$('import').onclick = async () => {
+  if (!connected || !directory || transfer || expectedRestore) return;
+  try {
+    await ensureDirectory();
+    const file = await pickImportFile();
+    await startImportWithFile(file);
   } catch (e) {
     transfer = null;
-    setStatus(e.message, { error: true });
+    if (e.name !== 'AbortError') setStatus(e.message, { error: true });
     controls();
   }
 };
 
 $('forget-result').onclick = () => {
   rememberRestore(null);
-  setStatus(
-    '已结束核对；这不表示导入成功。请保留原备份，在设备核实进度后再操作。',
-    { error: true },
-  );
+  clearAutoReconnect();
+  setStatus('已结束核对。请在设备核实进度后再操作。', { tip: true });
   controls();
 };
 
@@ -476,8 +601,6 @@ $('local-start').hidden = window.isSecureContext;
 preflight();
 controls();
 if (expectedRestore) {
-  setStatus(
-    '检测到未核对完的导入。请重新连接同一台设备以确认结果；在此之前不要删除原备份。',
-    { tip: true },
-  );
+  setStatus('检测到未核对完的导入，正在尝试自动重连…', { tip: true });
+  scheduleAutoReconnect();
 }

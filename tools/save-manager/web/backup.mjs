@@ -33,6 +33,7 @@ export class Receiver {
     }
 
     if (p[1] === 'ERROR') {
+      /* Never throw from ERROR: throwing used to abort readLoop and drop USB. */
       if (p[2] === 'STAGE') {
         const reasons = {
           LAYOUT: '设备分区布局不支持导入',
@@ -46,25 +47,27 @@ export class Receiver {
           JOURNAL: '导入恢复日志写入或校验失败',
         };
         const detail = Object.hasOwn(reasons, p[3]) ? reasons[p[3]] : null;
-        throw Error(
-          detail
+        return {
+          error: detail
             ? `${detail}（STAGE ${p[3]}），原存档未替换`
-            : '存档内容不兼容或暂存失败，原存档未替换',
-        );
+            : '存档写入失败。若已生成 before-import 文件，请用它重新导入',
+        };
+      }
+      if (p[2] === 'BUSY') {
+        return { busy: true };
       }
       const map = {
-        TIMEOUT: '操作超时，当前存档未覆盖。请重新连接后再试。',
+        TIMEOUT: '操作已中止或超时，当前存档未覆盖。可直接重试。',
         SNAPSHOT: '当前存档备份失败，未开始导入。',
-        OPEN_IMPORT: '请先在设备打开「设置 → 导入存档」，再点网页上的发送。',
-        BUSY: '设备正在进行另一项操作，请稍候。',
+        OPEN_IMPORT: '设备未就绪接收导入。请确认已连接且空闲后重试。',
         INCOMPATIBLE:
           '备份不属于此设备，或存档版本不被当前固件支持。请先更新《余烬》固件。',
         MEMORY: '设备内存不足，请重启设备后重试。',
         CHECKSUM: '导入校验失败，原存档未替换。请保留原备份。',
-        SEQUENCE: '导入数据顺序错误，已中止。请重新连接后重试。',
+        SEQUENCE: '导入数据顺序错误，已中止。可直接重试。',
         NO_HOST: '设备未检测到电脑端。请确认本页已连接 USB。',
       };
-      throw Error(map[p[2]] || `设备拒绝操作（${p[2] || '未知'}）`);
+      return { error: map[p[2]] || `设备拒绝操作（${p[2] || '未知'}）` };
     }
 
     if (p[1] === 'OFFERED' && p.length === 2) return { offered: true };
@@ -98,7 +101,8 @@ export class Receiver {
 
     if (p[1] === 'BEGIN') {
       if (p.length !== 10 || p[2] !== this.session || this.pending) {
-        throw Error('备份开始信息无效，请断开后重连');
+        this.pending = null;
+        return { error: '备份开始信息无效，请重试' };
       }
       const [, , , id, device, firmware, version, address, size, crc] = p;
       if (
@@ -111,9 +115,10 @@ export class Receiver {
         Number(size) !== NVS_SIZE ||
         !/^[a-f0-9]{8}$/.test(crc)
       ) {
-        throw Error(
-          '设备或备份协议不支持。请确认设备已安装支持 USB 存档的《余烬》固件，并刷新本页。',
-        );
+        return {
+          error:
+            '设备或备份协议不支持。请确认固件支持 USB 存档，并强制刷新本页。',
+        };
       }
       this.pending = {
         id,
@@ -138,7 +143,8 @@ export class Receiver {
         !/^[a-f0-9]{256}$/.test(p[4]) ||
         q.offset + 128 > q.bytes.length
       ) {
-        throw Error('备份数据缺失或顺序错误，请重试备份');
+        this.pending = null;
+        return { error: '备份数据缺失或顺序错误，请重试备份' };
       }
       for (let i = 0; i < 128; i++) {
         q.bytes[q.offset + i] = parseInt(p[4].slice(i * 2, i * 2 + 2), 16);
@@ -155,13 +161,17 @@ export class Receiver {
         q.offset !== q.bytes.length ||
         crc32(q.bytes) !== q.crc
       ) {
-        throw Error('备份完整性校验失败，文件未写入。设备上的存档仍然安全。');
+        this.pending = null;
+        return {
+          error: '备份完整性校验失败，文件未写入。设备上的存档仍然安全。',
+        };
       }
       this.pending = null;
       return { complete: q };
     }
 
-    throw Error('收到未知备份消息，请升级本工具与设备固件后重试');
+    this.pending = null;
+    return { error: '收到未知备份消息，请升级本工具与设备固件后重试' };
   }
 }
 

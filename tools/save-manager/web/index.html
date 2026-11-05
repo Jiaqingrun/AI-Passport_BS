@@ -12,102 +12,88 @@
     <header>
       <p class="brand">EMBER / AI PASSPORT</p>
       <h1>余烬 · 存档管家</h1>
-      <p class="lede">把据点进度安全地留在这台电脑上。更新社区包、换机、误刷机之前，先做一次备份。</p>
+      <p class="lede">本机备份与恢复据点进度。刷社区包或换机前，先留一份。</p>
     </header>
 
     <div id="preflight" class="callout danger" hidden></div>
     <p id="live-hint" class="sr-only" role="status" aria-live="polite"></p>
 
     <section id="local-start" class="panel">
-      <h2>从下载入口开始</h2>
-      <p>浏览器只允许在 <strong>HTTPS</strong> 或 <strong>localhost</strong> 使用 USB。若你是从普通 HTTP 链接打开本页，请先下载本地工具：</p>
+      <h2>从本机打开</h2>
+      <p>浏览器只允许在 <strong>HTTPS</strong> 或 <strong>localhost</strong> 使用 USB。请下载本地工具：</p>
       <p><a class="download" href="download/EmberSaveManager.zip" download>下载本地存档工具 ZIP</a>
         <span class="muted">（Python 3.8+，无需 pip）</span></p>
       <ol class="steps-text">
-        <li>解压 ZIP，在解压后的文件夹打开终端。</li>
+        <li>解压后在该目录打开终端。</li>
         <li>macOS / Linux：<code>python3 server.py</code>；Windows：<code>py -3 server.py</code>。</li>
-        <li>用桌面 Chrome / Edge 打开 <a href="http://localhost:8901/">http://localhost:8901/</a>，保持终端运行。</li>
+        <li>用 Chrome / Edge 打开 <a href="http://localhost:8901/">http://localhost:8901/</a>。</li>
       </ol>
-      <p class="tip">端口被占用时追加 <code>--port 8902</code>，并打开对应 localhost 端口。文件只保存在你的电脑，不会上传。</p>
     </section>
 
     <section id="step-folder" class="panel" data-state="current">
       <div class="panel-head">
-        <h2>01　选择保存目录</h2>
+        <h2>01　备份目录</h2>
         <span class="step-badge">进行中</span>
       </div>
-      <p>每次备份生成<strong>独立新文件</strong>，不会覆盖旧备份。请选私人目录（例如「文档/余烬备份」），不要选到源码仓库里。</p>
+      <p>每次生成<strong>新文件</strong>，不覆盖旧备份。选私人目录即可。</p>
       <button type="button" id="folder">选择备份目录</button>
       <output id="directory">尚未选择</output>
-      <p class="tip">提示：目录授权只对当前浏览器会话有效；断线后若提示失效，重新点一次本按钮即可。</p>
     </section>
 
-    <section id="step-connect" class="panel" data-state="locked">
+    <section id="step-connect" class="panel" data-state="ready">
       <div class="panel-head">
         <h2>02　连接设备</h2>
-        <span class="step-badge">未就绪</span>
+        <span class="step-badge">可操作</span>
       </div>
-      <p>用支持数据的 Type-C 线连接 AI Passport，设备开机。在弹窗中选择名称含 <strong>USB JTAG/serial</strong> 的接口。</p>
-      <button type="button" id="connect" disabled>连接设备</button>
+      <p>Type-C 数据线连接并开机，选择 <strong>USB JTAG/serial</strong>。</p>
+      <button type="button" id="connect">连接设备</button>
       <button type="button" id="disconnect" disabled>断开</button>
       <output id="connection">尚未连接</output>
-      <ul class="checklist">
-        <li>先关闭串口监视器、刷写工具、其它占用同一口的程序</li>
-        <li>不要选蓝牙耳机等无关设备</li>
-        <li>连接本身<strong>不会</strong>自动导出存档，必须在设备上确认备份</li>
-      </ul>
+      <p class="tip">先关掉串口监视器 / 刷写工具。导入重启后会尝试自动重连核对。</p>
     </section>
 
     <section id="step-backup" class="panel" data-state="locked">
       <div class="panel-head">
-        <h2>03　在设备上备份</h2>
+        <h2>03　备份</h2>
         <span class="step-badge">未就绪</span>
       </div>
-      <p>设备路径：<strong>设置 → 备份存档 → 确认</strong>（具体文案以固件菜单为准）。确认后本页开始接收并校验。</p>
+      <p>连接后点一次即可；也可在设备「设置 → 备份存档」触发。</p>
+      <button type="button" id="pull" disabled>立即备份</button>
       <progress id="progress" value="0" max="1"></progress>
-      <p id="status" role="status" aria-live="polite">请先完成目录与连接。</p>
+      <p id="status" role="status" aria-live="polite">请先选择目录并连接设备。</p>
       <ol id="files" class="file-list"></ol>
-      <p class="tip">看到「校验通过 · 已落盘」才算备份成功。设备若提示「未检测到电脑」，请确认本页仍显示已连接。</p>
     </section>
 
     <section id="step-import" class="panel" data-state="locked">
       <div class="panel-head">
-        <h2>04　导入已有存档</h2>
+        <h2>04　导入</h2>
         <span class="step-badge">未就绪</span>
       </div>
-      <p>顺序很重要：先在<strong>设备</strong>打开「设置 → 导入存档」，再在本页选文件并发送。设备默认选中<strong>取消</strong>；确认覆盖后会先把当前档备份到上面选的目录。</p>
-      <label for="import-file">备份文件（.emsave）</label>
-      <input id="import-file" type="file" accept=".emsave,application/json">
-      <output id="import-info">尚未选择文件</output>
-      <button type="button" id="import" disabled>发送导入请求</button>
-      <button type="button" id="forget-result" hidden>结束本次结果核对</button>
+      <p>选文件并发送后，只在<strong>设备上确认覆盖</strong>（默认取消）。确认后会先自动备份当前档，再写入并重启。</p>
+      <button type="button" id="import" disabled>选择并导入</button>
+      <output id="import-info">尚未选择</output>
+      <button type="button" id="forget-result" hidden>结束结果核对</button>
       <ul class="checklist">
-        <li>仅限<strong>同一台</strong> AI Passport（设备 ID 必须一致）</li>
-        <li>确认覆盖后保持供电；完成时设备会重启</li>
-        <li>USB 断开后请重新连接本页，看到「导入完成」才算成功</li>
-        <li>「校验通过」只说明文件完整，不等于已经导入</li>
+        <li>仅限<strong>同一台</strong>设备（设备 ID 一致）</li>
+        <li>确认后保持供电；完成后设备会重启</li>
+        <li>看到「导入完成」才算成功；失败时用目录里 <code>before-import</code> 文件再导</li>
       </ul>
     </section>
 
     <section class="panel warn">
-      <h2>更新游戏 / 刷社区包之前</h2>
+      <h2>刷社区包之前</h2>
       <ol class="steps-text">
-        <li>用本工具备份，确认列表里出现新的 <code>.emsave</code>。</li>
-        <li>把文件复制到第二个位置（网盘私人目录或另一块盘）。</li>
-        <li>再安装社区完整包。完整安装常会清空 NVS，即使游戏名相同。</li>
-        <li>安装后回到本页导入；只有标注「保留存档更新」的工具才会跳过存档区。</li>
+        <li>本页备份，确认列表出现新的 <code>.emsave</code>。</li>
+        <li>复制到第二个位置（网盘或另一块盘）。</li>
+        <li>再安装；完整安装常会清空 NVS。</li>
+        <li>装完后用本页导入。</li>
       </ol>
-      <p class="tip">保档刷机（只写应用分区）与「完整安装」不同。不确定时，先备份再动手。</p>
     </section>
 
     <aside class="about">
-      <h2>这份备份里有什么</h2>
-      <p>包含《余烬》写入 NVS 的持久进度：天数与墙钟、仓库与资源、远征与站事、线索与电台相关持久状态、已保存的亮度/声音等设置。未落盘的临时界面光标、一次性动画不在恢复范围内。</p>
-      <p>备份含设备 NVS 原始数据，可能夹带其它命名空间信息。请放在私人目录，不要提交到 Git，不要公开分享。</p>
-      <p>设计参考了社区开源项目
-        <a href="https://luobata.github.io/ESP32-PokemonGo/" rel="noopener">PokeWalk 存档管理</a>
-        （USB Web Serial + 本机落盘、导入前自动预备份）。本仓库协议为 <code>!EMBACKUP</code> / <code>.emsave</code>，与 <code>.pksave</code> 不互通。</p>
-      <p>固件需实现 USB 存档协议后，本页的备份/导入才会响应。接入说明见仓库 <code>docs/firmware-integration.zh_CN.md</code>。</p>
+      <h2>备份内容</h2>
+      <p>含《余烬》NVS 持久进度：天数、仓库、远征与站事、线索与设置等。临时界面状态不在内。</p>
+      <p>文件请放私人目录，勿提交 Git、勿公开分享。</p>
     </aside>
 
     <footer>

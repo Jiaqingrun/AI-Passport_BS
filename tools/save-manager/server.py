@@ -22,12 +22,12 @@ START_HERE = """余烬 · 本地存档管家
 2. macOS / Linux: python3 server.py
    Windows:        py -3 server.py
 3. 浏览器打开 http://localhost:8901/
-4. 选择私人备份目录 → 连接 USB → 在设备上备份或导入。
-5. 保持终端运行；Ctrl+C 停止。
+4. 选择私人备份目录 → 连接设备 →「立即备份」或「选择并导入」。
+5. 导入时只在设备上确认覆盖；保持终端运行，Ctrl+C 停止。
 
 端口占用时：python3 server.py --port 8902
 存档只写在你电脑上，不会上传。
-导入仅限同一台 AI Passport；固件需支持 !EMBACKUP 协议。
+导入仅限同一台 AI Passport；固件需支持 !EMBACKUP（含 PULL）协议。
 """
 
 
@@ -95,7 +95,7 @@ def main() -> None:
     args = parser.parse_args()
     handler = partial(Handler, directory=str(ROOT / "web"))
     print(f"余烬存档管家: http://{args.host}:{args.port}", flush=True)
-    print("选择备份目录 → 连接 USB → 在设备确认备份/导入", flush=True)
+    print("选择备份目录 → 连接设备 → 立即备份 / 选择并导入", flush=True)
     ThreadingHTTPServer((args.host, args.port), handler).serve_forever()
 
 
