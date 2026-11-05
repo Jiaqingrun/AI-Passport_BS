@@ -1,0 +1,51 @@
+name: Deploy save manager Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/save-manager/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage public files
+        run: |
+          mkdir -p _site
+          cp tools/save-manager/web/index.html \
+             tools/save-manager/web/style.css \
+             tools/save-manager/web/app.mjs \
+             tools/save-manager/web/backup.mjs \
+             _site/
+          # Offline ZIP for HTTP visitors: pack server + web
+          mkdir -p _bundle/EmberSaveManager/web
+          cp tools/save-manager/server.py _bundle/EmberSaveManager/
+          cp tools/save-manager/web/* _bundle/EmberSaveManager/web/
+          printf '%s\n' 'See START-HERE in repo README: run python3 server.py' > _bundle/EmberSaveManager/START-HERE.txt
+          (cd _bundle && zip -qr ../_site/EmberSaveManager.zip EmberSaveManager)
+          # Pages download path expected by index.html
+          mkdir -p _site/download
+          cp _site/EmberSaveManager.zip _site/download/EmberSaveManager.zip
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
