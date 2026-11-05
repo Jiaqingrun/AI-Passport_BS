@@ -21,11 +21,11 @@ START_HERE = """余烬 · 本地存档管家
 1. 解压本 ZIP，在本文件夹打开终端。
 2. macOS / Linux: python3 server.py
    Windows:        py -3 server.py
-3. 浏览器打开 http://localhost:8765/
+3. 浏览器打开 http://localhost:8901/
 4. 选择私人备份目录 → 连接 USB → 在设备上备份或导入。
 5. 保持终端运行；Ctrl+C 停止。
 
-端口占用时：python3 server.py --port 8766
+端口占用时：python3 server.py --port 8902
 存档只写在你电脑上，不会上传。
 导入仅限同一台 AI Passport；固件需支持 !EMBACKUP 协议。
 """
@@ -91,7 +91,7 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description="余烬存档管家本地服务")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=8901)
     args = parser.parse_args()
     handler = partial(Handler, directory=str(ROOT / "web"))
     print(f"余烬存档管家: http://{args.host}:{args.port}", flush=True)

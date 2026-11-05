@@ -14,7 +14,7 @@
      ```bash
      python3 tools/save-manager/server.py
      ```
-     打开 [http://localhost:8765/](http://localhost:8765/)
+     打开 [http://localhost:8901/](http://localhost:8901/)
    - 或下载页面上的 **EmberSaveManager.zip**，解压后同样运行 `server.py`。
 3. 按页面四步操作：
    1. 选择私人备份目录  
@@ -40,7 +40,7 @@
 
 ```bash
 # 本地页
-python3 tools/save-manager/server.py --port 8765
+python3 tools/save-manager/server.py --port 8901
 
 # 只读检查备份文件
 python3 tools/save-manager/inspect_emsave.py path/to/file.emsave
