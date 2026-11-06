@@ -61,4 +61,14 @@ for (let off = 0; off < NVS_SIZE; off += 128) {
 const done = r.accept(`${PROTOCOL} END 1 ${crc}`);
 assert.equal(done.complete.crc, crc);
 
+assert.deepEqual(
+  r.accept(`${PROTOCOL} RESTORED ${session} 1 deadbeef`),
+  { restored: { result: 1, crc: 'deadbeef' } },
+);
+assert.deepEqual(
+  r.accept(`${PROTOCOL} RESTORED ${session} 3 cafebabe`),
+  { restored: { result: 3, crc: 'cafebabe' } },
+);
+assert.equal(r.accept(`${PROTOCOL} RESTORED ${session} 9 deadbeef`), null);
+
 console.log('selftest: ok');

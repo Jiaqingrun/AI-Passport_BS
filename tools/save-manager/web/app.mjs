@@ -250,12 +250,14 @@ async function line(text) {
       scheduleAutoReconnect();
     }
     if (result?.restored) {
+      const code = result.restored.result;
       const messages = {
         1: '导入完成。请在设备核对天数、仓库与线索。',
         2: '导入写入失败，设备无法本地回滚。请立即用目录里 Ember-before-import- 备份再导入。',
-        3: '已写入但读档失败，不能确认成功。请保留原备份与 before-import 文件。',
+        3:
+          '设备回报「写入后读档失败」。请先打开游戏看天数/仓库是否已是备份进度；若进度正确可忽略并升级《余烬》。若进度不对，再用 Ember-before-import- 文件导入，并保留原备份。',
       };
-      const msg = messages[result.restored.result] || '收到导入结果，请在设备核对。';
+      const msg = messages[code] || '收到导入结果，请在设备核对。';
       if (expectedRestore) {
         if (
           transfer ||
@@ -267,9 +269,10 @@ async function line(text) {
           );
         }
       }
+      /* 2 = hard fail; 3 = verify failed (may still be playable — check device first). */
       setStatus(msg, {
-        error: result.restored.result !== 1,
-        tip: result.restored.result === 1,
+        error: code === 2 || code === 3,
+        tip: code === 1,
       });
       rememberRestore(null);
       clearAutoReconnect();

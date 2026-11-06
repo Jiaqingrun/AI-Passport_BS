@@ -16,6 +16,8 @@
 `device_id`：12 位小写 hex（由固件稳定导出，同机不变）。  
 `firmware`：64 位小写 hex（构建指纹，追溯用）。
 
+设备侧游戏存档写在 NVS **命名空间** `ashbox`、键 `save`（blob magic 为 `ASH2`，与命名空间不是同一个词）。导入后 `RESTORED` 的 `result=1` 表示固件已能打开该命名空间并读到存档键。
+
 ## 备份（设备发起）
 
 设备仅在用户确认「备份存档」且会话有效时开始：
@@ -46,9 +48,9 @@ PC 落盘并回读校验后：
 7. PC：`!EMBACKUP RFIN <session> <id>`  
 8. Dev 校验暂存成功：`!EMBACKUP STAGED <crc32>` 并重启。  
 9. 再连接后 Dev：`!EMBACKUP RESTORED <session> <result> <crc32>`  
-    - `1` 成功读档  
+    - `1` 成功：分区已写入，且能打开 `ashbox`/`save`  
     - `2` 擦除后写入失败（设备无法本地回滚；请用电脑上的 `Ember-before-import-…emsave` 再导入）  
-    - `3` 写入后读档失败  
+    - `3` 分区写入后校验读档失败（先在设备上核对天数/仓库；确认坏档再用 before-import 重导。旧固件曾误用 magic 名 `ASH2` 当命名空间，会把成功标成 `3`；请升级《余烬》后再判）  
 
 ## 错误
 
